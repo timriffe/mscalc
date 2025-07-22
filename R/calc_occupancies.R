@@ -29,8 +29,17 @@ calc_occupancies <- function(p_list,
     delim <- detect_delim(names(p_list))
   }
   all_probs <- unlist(p_list, use.names = FALSE)
+  # check for NA values
+  if (anyNA(all_probs)) {
+    stop("Transition probabilities must not contain NA values.")
+  }
+  # check validity
   if (any(all_probs < 0 | all_probs > 1)) {
     stop("Transition probabilities must be between 0 and 1 (inclusive).")
+  }
+  trans_lengths <- vapply(p_list, length, integer(1))
+  if (any(trans_lengths != length(age))) {
+    stop("All transition vectors must be the same length as `age`.")
   }
   n                <- length(age)
 

@@ -76,3 +76,28 @@ test_that("Single-state system with no transitions throws error", {
   age <- 65:70
   expect_error(calc_occupancies(p_list, age = age, origin_state = "P"))
 })
+
+test_that("NA transition probabilities trigger error", {
+  bad_list <- prepare_p_list(transitions_example)
+  bad_list$p_list[["PW"]][5] <- NA
+  expect_error(calc_occupancies(bad_list$p_list,
+                                origin_state = "P",
+                                age = bad_list$age),
+               regexp = "NA values")
+})
+
+test_that("Mismatched transition length triggers error", {
+  bad_list <- prepare_p_list(transitions_example)
+  bad_list$p_list[["PW"]] <- bad_list$p_list[["PW"]][-1]  # shorten vector
+  expect_error(calc_occupancies(bad_list$p_list,
+                                origin_state = "P",
+                                age = bad_list$age),
+               regexp = "length")
+})
+
+test_that("Unlinked states do not cause failure", {
+  p_list <- list(PW = rep(0.5, 6), WX = rep(0.3, 6))  # 'X' not used
+  age <- 65:70
+  out <- calc_occupancies(p_list, age = age, origin_state = "P")
+  expect_true(is.data.frame(out))
+})
