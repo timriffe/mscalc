@@ -28,7 +28,10 @@ calc_occupancies <- function(p_list,
   if (is.null(delim)){
     delim <- detect_delim(names(p_list))
   }
-
+  all_probs <- unlist(p_list, use.names = FALSE)
+  if (any(all_probs < 0 | all_probs > 1)) {
+    stop("Transition probabilities must be between 0 and 1 (inclusive).")
+  }
   n                <- length(age)
 
   trans_info       <- split_transitions(p_list, delim)
@@ -38,6 +41,8 @@ calc_occupancies <- function(p_list,
   absorbing_states <- setdiff(to_states, from_states)
   all_states       <- union(from_states, to_states)
   n_trans          <- length(transient_states)
+
+
   # Initial distribution
   if (!is.null(init)) {
     stopifnot(all(names(init) %in% transient_states))
@@ -234,6 +239,7 @@ prepare_p_list <- function(transitions,
   # Case 1: It's a list already
   if (is.list(transitions) && !is.data.frame(transitions)) {
     p_list <- transitions
+    age <- NULL  # must be provided by user in this case
   }
   # Case 2: It's a tidy data frame with from_to and p
   else if (is.data.frame(transitions) &&
@@ -247,24 +253,46 @@ prepare_p_list <- function(transitions,
 
     age <- wide[[age_col]]
     p_list <- as.list(wide[ , !(names(wide) %in% age_col)])
-
   }
   # Case 3: It's already a wide data frame (age + from_to cols)
   else if (is.data.frame(transitions) && age_col %in% names(transitions)) {
     wide <- dplyr::arrange(transitions, .data[[age_col]])
     age <- wide[[age_col]]
     p_list <- as.list(wide[ , !(names(wide) %in% age_col)])
-  }
-  else {
+  } else {
     stop("Unsupported input format for `transitions`. Must be tidy df, wide df, or list.")
   }
+
+  # Remove malformed entries
+  p_list <- Filter(function(x) length(x) > 0, p_list)
 
   # Transition name check
   trans_info <- split_transitions(p_list, delim = delim)
   from_states <- trans_info$from
   to_states <- trans_info$to
 
-  # Fill in missing transitions and infer self-loops
+  # Degenerate case: only self-transitions (e.g., PP)
+  if (all(from_states == to_states)) {
+    if (delim == "") delim <- "->"
+
+    old_name <- paste0(from_states, from_states)
+    new_name <- paste(from_states, from_states, sep = delim)
+    names(p_list)[names(p_list) == old_name] <- new_name
+
+    self_prob <- p_list[[new_name]]
+    loss_prob <- pmax(0, 1 - self_prob)
+    loss_name <- paste(from_states, "abs", sep = delim)
+    p_list[[loss_name]] <- loss_prob
+
+    # Reparse with updated names
+    trans_info <- split_transitions(p_list, delim = delim)
+    from_states <- trans_info$from
+    to_states <- trans_info$to
+  }
+
+  # Fill in and infer transitions
+  n <- length(p_list[[1]])
+  p_list <- Filter(function(x) length(x) == n, p_list)
   p_list <- fill_missing_transitions(p_list, from_states, to_states, delim)
   p_list <- infer_self_transitions(p_list, from_states, to_states, delim)
 
@@ -287,17 +315,18 @@ prepare_p_list <- function(transitions,
 #'
 #' @export
 detect_delim <- function(names) {
-  if (!is.character(names)) stop("Input to detect_delim() must be character vector.")
+  if (!is.character(names)) stop("Input to detect_delim() must be a character vector.")
 
-  common_delims <- c("->", "_", "-", ":","::", "\\|", "~", "\\.")
+  common_delims <- c("->", "_", "-", ":", "::", "\\|", "~", "\\.")
 
   detected <- vapply(common_delims, function(d) {
     all(grepl(d, names))
   }, logical(1))
 
   if (any(detected)) {
-    return(names(common_delims)[which(detected)[1]])
+    return(common_delims[which(detected)[1]])
   } else {
     return("")  # Assume compact form like "PW" with no delimiter
   }
 }
+
