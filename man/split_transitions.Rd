@@ -4,12 +4,12 @@
 \alias{split_transitions}
 \title{Extract origin and destination states from transition names}
 \usage{
-split_transitions(p_list, delim = "->")
+split_transitions(p_list, delim = NULL)
 }
 \arguments{
 \item{p_list}{A named list of transitions where names follow the \code{"from->to"} convention.}
 
-\item{delim}{Character delimiter between \code{from} and \code{to} in transition names. Default is \code{"->"}.}
+\item{delim}{Character delimiter between \code{from} and \code{to} in transition names. If not specified we try to detect it from names of \code{p_list}}
 }
 \value{
 A named list with two elements:

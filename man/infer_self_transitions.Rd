@@ -4,7 +4,7 @@
 \alias{infer_self_transitions}
 \title{Infer self-transitions as residual probabilities}
 \usage{
-infer_self_transitions(p_list, from_states, to_states, delim = "->")
+infer_self_transitions(p_list, from_states, to_states, delim = NULL)
 }
 \arguments{
 \item{p_list}{A named list of numeric vectors representing transition probabilities.}
@@ -13,7 +13,7 @@ infer_self_transitions(p_list, from_states, to_states, delim = "->")
 
 \item{to_states}{Character vector of possible destination states.}
 
-\item{delim}{Character delimiter used in transition names. Default is \code{"->"}.}
+\item{delim}{Character delimiter used in transition names. If not specified we try to detect it from names of \code{p_list}}
 }
 \value{
 A modified \code{p_list} with self-transition vectors (e.g., \code{"P->P"}) added or updated.

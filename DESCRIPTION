@@ -1,9 +1,9 @@
 Package: mscalc
-Title: What the Package Does (One Line, Title Case)
+Title: Calculates State Occupancy Times by Age from Discrete Time Transition Probabilities
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+    person("Tim", "Riffe", , "tim.riffe@ehu.eus", role = c("aut", "cre"))
+Description: Calculates state occupancy times by age from discrete time transition probabilities blazingly fast and without matrix inversion. State spaces are flexibly supported.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -11,7 +11,9 @@ RoxygenNote: 7.3.2
 LinkingTo: 
     Rcpp
 Imports: 
-    Rcpp
+    Rcpp,
+    dplyr,
+    tidyr
 Depends: 
     R (>= 3.5)
 LazyData: true

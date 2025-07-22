@@ -9,7 +9,7 @@ calc_occupancies(
   age,
   init = NULL,
   origin_state = NULL,
-  delim = "->",
+  delim = NULL,
   age_interval = 1
 )
 }
@@ -33,17 +33,8 @@ A data frame of occupancy times by state and age.
 Calculates state occupancy over age using a list of transition probabilities.
 }
 \examples{
-Create p_list the tidy way
-p_df <- transitions_example |>
- tidyr::pivot_wider(names_from = from_to, values_from = p) |>
- dplyr::arrange(age)
-age <- p_df$age
-p_list <- as.list(p_df[ , -1])
-trans_info <- split_transitions(p_list)
-from_states <- trans_info$from
-to_states <- trans_info$to
-p_list <- fill_missing_transitions(p_list, from_states, to_states) |>
-infer_self_transitions(p_list, from_states, to_states)
-out <- calc_occupancies(p_list, age, origin_state = "P")
-head(out)
+
+prep <- prepare_p_list(transitions_example)
+occup <- calc_occupancies(prep$p_list, prep$age, origin_state = "P")
+head(occup)
 }

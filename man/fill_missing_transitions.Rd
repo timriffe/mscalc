@@ -4,7 +4,7 @@
 \alias{fill_missing_transitions}
 \title{Fill in missing transitions with zero probabilities}
 \usage{
-fill_missing_transitions(p_list, from_states, to_states, delim = "->")
+fill_missing_transitions(p_list, from_states, to_states, delim = NULL)
 }
 \arguments{
 \item{p_list}{A named list of numeric vectors. Each element corresponds to a transition
@@ -14,8 +14,7 @@ between states, e.g., \code{"P->W"}, \code{"W->D"}.}
 
 \item{to_states}{Character vector of destination states (can include absorbing).}
 
-\item{delim}{Character string separating origin and destination states in the names
-of transitions. Default is \code{"->"}.}
+\item{delim}{Character string separating origin and destination states in the names of transitions. If not specified we try to detect it from names of \code{p_list}}
 }
 \value{
 A completed \code{p_list} list with any missing transitions added as zero vectors.
