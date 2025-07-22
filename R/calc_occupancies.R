@@ -183,6 +183,7 @@ split_transitions <- function(p_list, delim = NULL) {
 #'   - Or a named list of transition vectors, with names of the form "from_to".
 #' @param age_col The name of the age column (default is `"age"`).
 #' @param trans_col The name of the column containing information of origin-destination pairs for transitions. Default `"from_to"`.
+#' @param p_col The name of the column containing transition probabilities. Default `"p"`.
 #' @param delim Character string used to split transition names into origin and destination states. Default is `"->"`, but use `""` if transitions are compact like `"PW"` or `"UD"`.
 #'
 #' @return A list with two elements:
@@ -208,10 +209,10 @@ split_transitions <- function(p_list, delim = NULL) {
 #'
 #' @export
 
-
 prepare_p_list <- function(transitions,
                            age_col = "age",
                            trans_col = "from_to",
+                           p_col = "p",
                            delim = NULL) {
   # Infer delimiter if not provided
   if (is.null(delim)) {
@@ -236,12 +237,12 @@ prepare_p_list <- function(transitions,
   }
   # Case 2: It's a tidy data frame with from_to and p
   else if (is.data.frame(transitions) &&
-           all(c(age_col, "from_to", "p") %in% names(transitions))) {
+           all(c(age_col, trans_col, p_col) %in% names(transitions))) {
 
     wide <- tidyr::pivot_wider(transitions,
                                id_cols = all_of(age_col),
-                               names_from = from_to,
-                               values_from = p) |>
+                               names_from = all_of(trans_col),
+                               values_from = all_of(p_col)) |>
       dplyr::arrange(.data[[age_col]])
 
     age <- wide[[age_col]]

@@ -8,6 +8,7 @@ prepare_p_list(
   transitions,
   age_col = "age",
   trans_col = "from_to",
+  p_col = "p",
   delim = NULL
 )
 }
@@ -22,6 +23,8 @@ prepare_p_list(
 \item{age_col}{The name of the age column (default is \code{"age"}).}
 
 \item{trans_col}{The name of the column containing information of origin-destination pairs for transitions. Default \code{"from_to"}.}
+
+\item{p_col}{The name of the column containing transition probabilities. Default \code{"p"}.}
 
 \item{delim}{Character string used to split transition names into origin and destination states. Default is \code{"->"}, but use \code{""} if transitions are compact like \code{"PW"} or \code{"UD"}.}
 }
