@@ -101,3 +101,4 @@ test_that("Unlinked states do not cause failure", {
   out <- calc_occupancies(p_list, age = age, origin_state = "P")
   expect_true(is.data.frame(out))
 })
+
