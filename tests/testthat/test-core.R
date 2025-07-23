@@ -102,3 +102,20 @@ test_that("Unlinked states do not cause failure", {
   expect_true(is.data.frame(out))
 })
 
+test_that("Tidy input is accepted and produces expected results", {
+  result <- calc_occupancies(transitions_example, origin_state = "P")
+  expect_s3_class(result, "data.frame")
+  expect_true("P" %in% names(result))
+  expect_true("age" %in% names(result))
+})
+
+test_that("Wide data frame input is handled", {
+  wide <- tidyr::pivot_wider(transitions_example,
+                             names_from = from_to,
+                             values_from = p)
+  wide <- dplyr::arrange(wide, age)
+
+  result <- calc_occupancies(wide, origin_state = "P")
+  expect_s3_class(result, "data.frame")
+  expect_true("P" %in% names(result))
+})

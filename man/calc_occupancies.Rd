@@ -6,7 +6,7 @@
 \usage{
 calc_occupancies(
   p_list,
-  age,
+  age = NULL,
   init = NULL,
   origin_state = NULL,
   delim = NULL,
@@ -37,4 +37,7 @@ Calculates state occupancy over age using a list of transition probabilities.
 prep <- prepare_p_list(transitions_example)
 occup <- calc_occupancies(prep$p_list, prep$age, origin_state = "P")
 head(occup)
+# or without prep (but with prep overhead happening internally)
+occup <- calc_occupancies(transitions_example, origin_state = "P")
+# it's ca 2x faster to have the data in list format in advance, FYI.
 }

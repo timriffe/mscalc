@@ -17,76 +17,109 @@
 #'prep <- prepare_p_list(transitions_example)
 #'occup <- calc_occupancies(prep$p_list, prep$age, origin_state = "P")
 #'head(occup)
-
+#' # or without prep (but with prep overhead happening internally)
+#' occup <- calc_occupancies(transitions_example, origin_state = "P")
+#' # it's ca 2x faster to have the data in list format in advance, FYI.
 calc_occupancies <- function(p_list,
-                             age,
+                             age = NULL,
                              init = NULL,
                              origin_state = NULL,
                              delim = NULL,
                              age_interval = 1) {
 
-  if (is.null(delim)){
+  # Handle inputs flexibly
+  if (!is.list(p_list) ||
+      inherits(p_list, "data.frame") ||
+      !all(sapply(p_list, is.numeric))) {
+
+    prep <- prepare_p_list(p_list, delim = delim)
+    age <- prep$age
+    p_list <- prep$p_list
+  } else if (is.null(age)) {
+    stop("If supplying p_list as a list, you must also supply `age`.")
+  }
+
+  n <- length(age)
+
+  # Parse transitions
+  if (is.null(delim)) {
     delim <- detect_delim(names(p_list))
   }
-  all_probs <- unlist(p_list, use.names = FALSE)
-  # check for NA values
-  if (anyNA(all_probs)) {
-    stop("Transition probabilities must not contain NA values.")
-  }
-  # check validity
-  if (any(all_probs < 0 | all_probs > 1)) {
-    stop("Transition probabilities must be between 0 and 1 (inclusive).")
-  }
-  trans_lengths <- vapply(p_list, length, integer(1))
-  if (any(trans_lengths != length(age))) {
-    stop("All transition vectors must be the same length as `age`.")
-  }
-  n                <- length(age)
 
-  trans_info       <- split_transitions(p_list, delim)
-  from_states      <- trans_info$from
-  to_states        <- trans_info$to
+  trans_info <- split_transitions(p_list, delim)
+  from_states <- trans_info$from
+  to_states <- trans_info$to
   transient_states <- from_states
   absorbing_states <- setdiff(to_states, from_states)
-  all_states       <- union(from_states, to_states)
-  n_trans          <- length(transient_states)
+  all_states <- union(from_states, to_states)
 
-
-  # Initial distribution
+  # Validate / build initial state distribution
   if (!is.null(init)) {
     stopifnot(all(names(init) %in% transient_states))
-    stopifnot(all(init >= 0))
-    stopifnot(sum(init) > 0)
-    init                     <- init / sum(init)
-    init_probs               <- rep(0, n_trans)
-    names(init_probs)        <- transient_states
-    init_probs[names(init)]  <- init
+    stopifnot(abs(sum(init) - 1) < 1e-8)
+    init_probs <- setNames(rep(0, length(transient_states)), transient_states)
+    init_probs[names(init)] <- init
   } else if (!is.null(origin_state)) {
     stopifnot(origin_state %in% transient_states)
-    init_probs               <- rep(0, n_trans)
-    names(init_probs)        <- transient_states
+    init_probs <- setNames(rep(0, length(transient_states)), transient_states)
     init_probs[origin_state] <- 1
   } else {
     stop("Must supply either `origin_state` or `init`.")
   }
 
-  # Call Rcpp calculator
-  state_occup <- calc_occupancy_cpp(
-    p_list = p_list,
-    transient_states = transient_states,
-    all_states = all_states,
-    init_probs = init_probs,
-    n = n,
-    delim = delim
-  )
+  # NA check
+  all_probs <- unlist(p_list)
+  if (any(is.na(all_probs))) {
+    stop("Transition probabilities must not contain NA values.")
+  }
 
+  # Length check
+  lengths_vec <- vapply(p_list, length, integer(1))
+  if (length(unique(lengths_vec)) != 1 || unique(lengths_vec) != n) {
+    stop("All transition vectors in `p_list` must have the same length as `age`.")
+  }
+
+  # Probability bounds check
+  if (any(all_probs < 0 | all_probs > 1)) {
+    stop("Transition probabilities must be between 0 and 1 (inclusive).")
+  }
+
+  # Initialize occupancy matrix
+  state_occup <- matrix(0, nrow = n, ncol = length(transient_states))
+  colnames(state_occup) <- transient_states
+  state_occup[1, ] <- init_probs
+
+  # Main loop
+  for (i in 1:(n - 1)) {
+    current <- state_occup[i, ]
+    next_occup <- setNames(numeric(length(transient_states)), transient_states)
+
+    for (from in transient_states) {
+      occup_from <- current[from]
+      outflow <- 0
+
+      for (to in all_states) {
+        trans_name <- paste(from, to, sep = delim)
+        p <- if (trans_name %in% names(p_list)) p_list[[trans_name]][i] else 0
+        if (to %in% transient_states) {
+          next_occup[to] <- next_occup[to] + occup_from * p
+        }
+        outflow <- outflow + p
+      }
+
+      # Residual self-transition
+      stay_prob <- max(0, 1 - outflow)
+      next_occup[from] <- next_occup[from] + occup_from * stay_prob
+    }
+
+    state_occup[i + 1, ] <- next_occup
+  }
   # scale up/down depending on time step size
   state_occup <- state_occup * age_interval
 
-  # Add age column and return as data.frame
   out <- as.data.frame(state_occup)
   out$age <- age
-  out
+  return(out)
 }
 
 
