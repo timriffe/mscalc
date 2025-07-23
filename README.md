@@ -43,3 +43,24 @@ colSums(Lxs)
 # and total remaining life expectancy:
 sum(Lxs)
 ```
+
+Also, note, you can provide tidy or wide `data.frames` as `p_list`, in which case they are reformatted internally, but there is an efficiency tradeoff, see:
+```
+# install.packages("bench")
+prep   <- prepare_p_list(transitions_example)
+age    <- prep$age
+p_list <- prep$p_list
+
+# Tidy version (original)
+tidy_input <- transitions_example
+
+# Benchmark
+bench::mark(
+  list_input = calc_occupancies(p_list = p_list, age = age, origin_state = "P"),
+  tidy_input = calc_occupancies(p_list = tidy_input, origin_state = "P"),
+  check = TRUE,
+  iterations = 100
+)
+```
+
+That is, if you're really doing big runs (bootstrapping, etc) then it's best to send data in directly in the ideal list format, i.e. a names list of transitions.
