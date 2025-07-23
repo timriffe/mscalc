@@ -1,5 +1,6 @@
 Package: mscalc
 Title: Calculates State Occupancy Times by Age from Discrete Time Transition Probabilities
+Date: 2025-07-23
 Version: 0.0.0.9000
 Authors@R: 
     person("Tim", "Riffe", , "tim.riffe@ehu.eus", role = c("aut", "cre"))

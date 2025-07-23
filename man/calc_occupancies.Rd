@@ -10,7 +10,10 @@ calc_occupancies(
   init = NULL,
   origin_state = NULL,
   delim = NULL,
-  age_interval = 1
+  age_interval = 1,
+  age_col = "age",
+  trans_col = "from_to",
+  p_col = "p"
 )
 }
 \arguments{
@@ -25,6 +28,12 @@ calc_occupancies(
 \item{delim}{Character delimiter separating from/to in transition names.}
 
 \item{age_interval}{integer value representing time step (default 1)}
+
+\item{age_col}{Name of the age column (default = \code{"age"}) when input is a data.frame.}
+
+\item{trans_col}{Name of the transition column (default = \code{"from_to"}) when input is a tidy \code{data.frame}.}
+
+\item{p_col}{Name of the transition probability column (default = \code{"p"}) when input is a tidy \code{data.frame}.}
 }
 \value{
 A data frame of occupancy times by state and age.

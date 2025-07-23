@@ -9,9 +9,12 @@
 #' @param origin_state Optional single origin state (alternative to `init`).
 #' @param delim Character delimiter separating from/to in transition names.
 #' @param age_interval integer value representing time step (default 1)
-#'
+#' @param age_col Name of the age column (default = `"age"`) when input is a data.frame.
+#' @param trans_col Name of the transition column (default = `"from_to"`) when input is a tidy `data.frame`.
+#' @param p_col Name of the transition probability column (default = `"p"`) when input is a tidy `data.frame`.
 #' @return A data frame of occupancy times by state and age.
 #' @export
+#' @importFrom stats setNames
 #' @examples
 #'
 #'prep <- prepare_p_list(transitions_example)
@@ -25,19 +28,28 @@ calc_occupancies <- function(p_list,
                              init = NULL,
                              origin_state = NULL,
                              delim = NULL,
-                             age_interval = 1) {
+                             age_interval = 1,
+                             age_col = "age",
+                             trans_col = "from_to",
+                             p_col = "p") {
+
 
   # Handle inputs flexibly
-  if (!is.list(p_list) ||
-      inherits(p_list, "data.frame") ||
-      !all(sapply(p_list, is.numeric))) {
+  is_df <- inherits(p_list, "data.frame")
+  is_numeric_list <- is.list(p_list) && !is_df && all(sapply(p_list, is.numeric))
 
-    prep <- prepare_p_list(p_list, delim = delim)
+  if (!is_numeric_list) {
+    prep <- prepare_p_list(p_list,
+                           delim = delim,
+                           age_col = age_col,
+                           trans_col = trans_col,
+                           p_col = p_col)
     age <- prep$age
     p_list <- prep$p_list
   } else if (is.null(age)) {
     stop("If supplying p_list as a list, you must also supply `age`.")
   }
+
 
   n <- length(age)
 
@@ -114,15 +126,14 @@ calc_occupancies <- function(p_list,
 
     state_occup[i + 1, ] <- next_occup
   }
-  # scale up/down depending on time step size
+
+  # Adjust based on age interval
   state_occup <- state_occup * age_interval
 
   out <- as.data.frame(state_occup)
   out$age <- age
   return(out)
 }
-
-
 #' Fill in missing transitions with zero probabilities
 #'
 #' @description Ensures that all possible transitions from a set of `from_states` to a set of `to_states` are present in the `p_list`, filling any missing transitions with zero probability vectors. This omits self-transitions.
@@ -261,6 +272,7 @@ prepare_p_list <- function(transitions,
                            trans_col = "from_to",
                            p_col = "p",
                            delim = NULL) {
+
   # Infer delimiter if not provided
   if (is.null(delim)) {
     name_sample <- if (is.data.frame(transitions)) {
@@ -274,16 +286,15 @@ prepare_p_list <- function(transitions,
     } else {
       stop("Cannot detect delimiter: unrecognized input format.")
     }
-
     delim <- detect_delim(name_sample)
   }
 
-  # Case 1: It's a list already
+  # Case 1: It's already a named list of numeric vectors
   if (is.list(transitions) && !is.data.frame(transitions)) {
     p_list <- transitions
-    age <- NULL  # must be provided by user in this case
+    age <- seq_along(transitions[[1]])
   }
-  # Case 2: It's a tidy data frame with from_to and p
+  # Case 2: Tidy data frame (long format)
   else if (is.data.frame(transitions) &&
            all(c(age_col, trans_col, p_col) %in% names(transitions))) {
 
@@ -296,17 +307,37 @@ prepare_p_list <- function(transitions,
     age <- wide[[age_col]]
     p_list <- as.list(wide[ , !(names(wide) %in% age_col)])
   }
-  # Case 3: It's already a wide data frame (age + from_to cols)
+  # Case 3: Wide data frame with age + transition columns + optional metadata
   else if (is.data.frame(transitions) && age_col %in% names(transitions)) {
     wide <- dplyr::arrange(transitions, .data[[age_col]])
     age <- wide[[age_col]]
-    p_list <- as.list(wide[ , !(names(wide) %in% age_col)])
+
+    # Filter only transition columns
+    maybe_trans <- setdiff(names(wide), age_col)
+    if (length(maybe_trans) == 0) stop("No transition columns detected in wide format.")
+
+    if (is.null(delim)) {
+      delim <- detect_delim(maybe_trans)
+    }
+
+    # Only include column names that match the state transition pattern
+    if (delim == "") {
+      # No delimiter: only allow names of length 2 (e.g., "PW")
+      trans_cols <- maybe_trans[nchar(maybe_trans) == 2]
+    } else {
+      transition_pattern <- paste0("^[^", delim, "]+", delim, "[^", delim, "]+$")
+      trans_cols <- grep(transition_pattern, maybe_trans, value = TRUE)
+    }
+
+    if (length(trans_cols) == 0) {
+      stop("No valid transition columns detected in wide format.")
+    }
+
+
+    p_list <- as.list(wide[ , trans_cols, drop = FALSE])
   } else {
     stop("Unsupported input format for `transitions`. Must be tidy df, wide df, or list.")
   }
-
-  # Remove malformed entries
-  p_list <- Filter(function(x) length(x) > 0, p_list)
 
   # Transition name check
   trans_info <- split_transitions(p_list, delim = delim)
@@ -317,30 +348,27 @@ prepare_p_list <- function(transitions,
   if (all(from_states == to_states)) {
     if (delim == "") delim <- "->"
 
-    old_name <- paste0(from_states, from_states)
-    new_name <- paste(from_states, from_states, sep = delim)
-    names(p_list)[names(p_list) == old_name] <- new_name
+    # Convert to standard form with absorbing state
+    new_p_list <- list()
+    for (name in names(p_list)) {
+      from <- substr(name, 1, nchar(name) / 2)
+      p_self <- p_list[[name]]
+      new_p_list[[paste(from, from, sep = delim)]] <- p_self
+      new_p_list[[paste(from, "abs", sep = delim)]] <- pmax(0, 1 - p_self)
+    }
+    p_list <- new_p_list
 
-    self_prob <- p_list[[new_name]]
-    loss_prob <- pmax(0, 1 - self_prob)
-    loss_name <- paste(from_states, "abs", sep = delim)
-    p_list[[loss_name]] <- loss_prob
-
-    # Reparse with updated names
-    trans_info <- split_transitions(p_list, delim = delim)
+    trans_info <- split_transitions(p_list, delim)
     from_states <- trans_info$from
-    to_states <- trans_info$to
+    to_states   <- trans_info$to
   }
 
-  # Fill in and infer transitions
-  n <- length(p_list[[1]])
-  p_list <- Filter(function(x) length(x) == n, p_list)
+  # Complete transition structure
   p_list <- fill_missing_transitions(p_list, from_states, to_states, delim)
   p_list <- infer_self_transitions(p_list, from_states, to_states, delim)
 
   return(list(p_list = p_list, age = age))
 }
-
 
 #' Detect delimiter used in transition names
 #'

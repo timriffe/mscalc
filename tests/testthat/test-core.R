@@ -60,13 +60,13 @@ test_that("1-state with PP or PD works like lifetable", {
   age <- 65:70
   # P -> P (perfect survivorship)
   p_list <- list(PP = rep(.9, length(age)))
-  p_list <- prepare_p_list(transitions = p_list)
+  p_list <- prepare_p_list(transitions = p_list,age=age)
   res <- calc_occupancies(p_list$p_list, age = age, origin_state = "P", delim="->")
   expect_equal(res$P, c(1,cumprod(rep(.9, length(age)-1))))
 
   # P -> D (some death)
   p_list <- list(PD = rep(0.1, length(age)))
-  p_list <- prepare_p_list(transitions = p_list)
+  p_list <- prepare_p_list(transitions = p_list,age=age)
   res2 <- calc_occupancies(p_list$p_list, age = age, origin_state = "P")
   expect_true(all(diff(res2$P) < 0))  # should decline
 })
@@ -119,3 +119,36 @@ test_that("Wide data frame input is handled", {
   expect_s3_class(result, "data.frame")
   expect_true("P" %in% names(result))
 })
+
+
+test_that("Tidy input with renamed columns is handled", {
+  df <- transitions_example |>
+    dplyr::rename(age_group = age,
+                  trans_label = from_to,
+                  probability = p)
+
+  out <- calc_occupancies(df,
+                          origin_state = "P",
+                          age_col = "age_group",
+                          trans_col = "trans_label",
+                          p_col = "probability")
+
+  expect_true("P" %in% colnames(out))
+  expect_equal(nrow(out), length(unique(df$age_group)))
+})
+
+test_that("Wide input with renamed age column and extra metadata is handled", {
+  wide <- tidyr::pivot_wider(transitions_example,
+                             names_from = from_to,
+                             values_from = p)
+  wide <- dplyr::rename(wide, start_age = age)
+  wide$region <- "X"  # extra irrelevant metadata
+
+  out <- calc_occupancies(wide,
+                          origin_state = "P",
+                          age_col = "start_age")
+
+  expect_true("P" %in% colnames(out))
+  expect_equal(nrow(out), length(unique(wide$start_age)))
+})
+
