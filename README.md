@@ -71,7 +71,7 @@ Here's a sneak peak at performance in terms of speed:
 
 And in terms of memory-usage:
 
-<img width="560" height="346" alt="image" src="https://github.com/user-attachments/assets/49f07389-26f8-4edf-83ce-0ea4a1db462b" />
+<img width="560" height="346" alt="image" src="https://github.com/user-attachments/assets/54db5e64-430d-4fe8-8d8e-736e7acbc655" />
 
 Check out the performance vignette for more details on these comparisons, and  suggest or prepare others so that we can find out whether this calculator is truly best in some category.
 
