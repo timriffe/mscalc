@@ -66,9 +66,11 @@ bench::mark(
 That is, if you're really doing big runs (bootstrapping, etc) then it's best to send data in directly in the ideal list format, i.e. a names list of transitions.
 
 Here's a sneak peak at performance in terms of speed:
+
 <img width="560" height="346" alt="image" src="https://github.com/user-attachments/assets/31345f0d-5bd0-424f-9387-630f6ebea429" />
 
 And in terms of memory-usage:
+
 <img width="560" height="346" alt="image" src="https://github.com/user-attachments/assets/49f07389-26f8-4edf-83ce-0ea4a1db462b" />
 
 Check out the performance vignette for more details on these comparisons, and  suggest or prepare others so that we can find out whether this calculator is truly best in some category.
