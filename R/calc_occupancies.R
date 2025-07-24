@@ -1,7 +1,6 @@
-
 #' Calculate multistate occupancy times
 #'
-#' @description Calculates state occupancy over age using a list of transition probabilities.
+#' @description Calculates state occupancy over age using a list of transition probabilities. Uses faster internal calculator than other versions.
 #'
 #' @param p_list A named list of age-specific transition probabilities. Recall data.frames and tibbles can function as lists too.
 #' @param age A numeric vector of age values.
@@ -22,8 +21,121 @@
 #'head(occup)
 #' # or without prep (but with prep overhead happening internally)
 #' occup <- calc_occupancies(transitions_example, origin_state = "P")
-#' # it's ca 2x faster to have the data in list format in advance, FYI.
+
 calc_occupancies <- function(p_list,
+                             age = NULL,
+                             init = NULL,
+                             origin_state = NULL,
+                             delim = NULL,
+                             age_interval = 1,
+                             age_col = "age",
+                             trans_col = "from_to",
+                             p_col = "p") {
+
+  # Handle inputs flexibly
+  is_df <- inherits(p_list, "data.frame")
+  is_numeric_list <- is.list(p_list) && !is_df && all(sapply(p_list, is.numeric))
+
+  if (!is_numeric_list) {
+    prep <- prepare_p_list(p_list,
+                           delim = delim,
+                           age_col = age_col,
+                           trans_col = trans_col,
+                           p_col = p_col)
+    age <- prep$age
+    p_list <- prep$p_list
+  } else if (is.null(age)) {
+    stop("If supplying p_list as a list, you must also supply `age`.")
+  }
+
+  n <- length(age)
+
+  # Parse transitions
+  if (is.null(delim)) {
+    delim <- detect_delim(names(p_list))
+  }
+
+  trans_info <- split_transitions(p_list, delim)
+  from_states <- trans_info$from
+  to_states <- trans_info$to
+  transient_states <- from_states
+  absorbing_states <- setdiff(to_states, from_states)
+  all_states <- union(from_states, to_states)
+
+  # Validate / build initial state distribution
+  if (!is.null(init)) {
+    stopifnot(all(names(init) %in% transient_states))
+    stopifnot(abs(sum(init) - 1) < 1e-8)
+    init_probs <- setNames(rep(0, length(transient_states)), transient_states)
+    init_probs[names(init)] <- init
+  } else if (!is.null(origin_state)) {
+    stopifnot(origin_state %in% transient_states)
+    init_probs <- setNames(rep(0, length(transient_states)), transient_states)
+    init_probs[origin_state] <- 1
+  } else {
+    stop("Must supply either `origin_state` or `init`.")
+  }
+
+  # NA check
+  all_probs <- unlist(p_list)
+  if (any(is.na(all_probs))) {
+    stop("Transition probabilities must not contain NA values.")
+  }
+
+  # Length check
+  lengths_vec <- vapply(p_list, length, integer(1))
+  if (length(unique(lengths_vec)) != 1 || unique(lengths_vec) != n) {
+    stop("All transition vectors in `p_list` must have the same length as `age`.")
+  }
+
+  # Probability bounds check
+  if (any(all_probs < 0 | all_probs > 1)) {
+    stop("Transition probabilities must be between 0 and 1 (inclusive).")
+  }
+
+  # Call the C++ backend (note: returns a matrix, need to format output)
+  occup <- calc_occupancies_cpp(
+    p_list = p_list,
+    transient_states = transient_states,
+    all_states = all_states,
+    init_probs = init_probs,
+    n = n,
+    delim = delim
+  )
+
+  # Output formatting
+  out <- as.data.frame(occup * age_interval)
+  out$age <- age
+
+  return(out)
+}
+
+
+#' Calculate multistate occupancy times
+#'
+#' @description Calculates state occupancy over age using a list of transition probabilities.
+#'
+#' @param p_list A named list of age-specific transition probabilities. Recall data.frames and tibbles can function as lists too.
+#' @param age A numeric vector of age values.
+#' @param init Optional named vector of initial state composition.
+#' @param origin_state Optional single origin state (alternative to `init`).
+#' @param delim Character delimiter separating from/to in transition names.
+#' @param age_interval integer value representing time step (default 1)
+#' @param age_col Name of the age column (default = `"age"`) when input is a data.frame.
+#' @param trans_col Name of the transition column (default = `"from_to"`) when input is a tidy `data.frame`.
+#' @param p_col Name of the transition probability column (default = `"p"`) when input is a tidy `data.frame`.
+#' @return A data frame of occupancy times by state and age.
+#' @export
+#' @importFrom stats setNames
+#' @examples
+#'
+#'prep <- prepare_p_list(transitions_example)
+#'occup <- calc_occupancies_base(prep$p_list, prep$age, origin_state = "P")
+#'head(occup)
+#' # or without prep (but with prep overhead happening internally)
+#' occup <- calc_occupancies_base(transitions_example, origin_state = "P")
+#' # it's ca 2x faster to have the data in list format in advance, FYI.
+calc_occupancies_base <- function(p_list,
                              age = NULL,
                              init = NULL,
                              origin_state = NULL,
@@ -134,6 +246,10 @@ calc_occupancies <- function(p_list,
   out$age <- age
   return(out)
 }
+
+
+
+
 #' Fill in missing transitions with zero probabilities
 #'
 #' @description Ensures that all possible transitions from a set of `from_states` to a set of `to_states` are present in the `p_list`, filling any missing transitions with zero probability vectors. This omits self-transitions.

@@ -1,0 +1,331 @@
+---
+title: "Performance Benchmarking of `calc_occupancies()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Performance Benchmarking}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(mscalc)  
+library(dplyr)
+library(tidyr)
+library(bench)
+library(purrr)
+library(Matrix)
+library(ggplot2)
+```
+
+## Goal
+
+We compare three methods for calculating multistate occupancy times:
+
+1. **`calc_occupancies()`** — the Rcpp-based main implementation in `mscalc`.
+2. **`calc_occupancies_base()`** — a base R loop version, included in the package `mscalc`.
+3. **`calc_occupancies_inversion()`** — a matrix inversion method (defined below).
+4. **`calc_occupancies_inversion_sparse()`** — a matrix inversion method (defined below) that uses sparse matrices from `Matrix`.
+
+Method 1 uses a C++ calculator `calc_occupanies_cpp` implemented in `mscalc`. If inputs are properly formatted in advance, this function can also be called directly somewhat more efficiently due to removing checks. Method 2 is identical in construction, but entirely using loops in base R. Method 3 is equivalent to the common matrix algebra approaches that are widely used. In this case, U is constructed with _from_ in rows and _to_ in columns (standard Markov orientation) and with states nested within ages. Method 4 is the same as 3 except sparse matrices are used rather than base stats matrices.
+
+## Call: more benchmark tests!
+Dear reader, do you have another go-to method we should compare with? Please pass me a minimal example and I'll try to add it as a fair comparison. I want this to be as fair and thorough as possible, because the idea is to recommend this as an internal calculator module for various R-packages that offer this.
+
+## Matrix inversion
+
+Matrix inversion seems to be the most common way of transforming transition probabilities into occupancy times. This requires making a matrix `U`, containing at least the transitions between and within transient states, inverting, and then post-processing. For large state spaces combined with higher numbers of age groups, this should become less memory efficient, but we do not know without testing which should be faster. Note, our goal is not to produce the entire fundamental matrix, `N` and stop there, but to go on to produce age-specific occupancy times extracted from `N`, based on weighting together columns/blocks from `N` according to an initial state or mixing distribution. This won't satisfy all needs of course, but can be modified to taste.
+```{r define-inversion}
+calc_occupancies_inversion <- function(p_list, age, origin_state = NULL, init = NULL, delim = "->") {
+  n_age <- length(age)
+  trans_info <- split_transitions(p_list, delim = delim)
+  from_states <- trans_info$from
+  to_states   <- trans_info$to
+
+  transient_states <- sort(unique(from_states))
+  state_index <- setNames(seq_along(transient_states), transient_states)
+  n_states <- length(transient_states)
+
+  # Build big_U in a block-wise manner
+  big_U <- matrix(0, nrow = n_age * n_states, ncol = n_age * n_states)
+  rownames(big_U) <- paste0(rep(transient_states, each = n_age), "_", rep(age, times = n_states))
+  colnames(big_U) <- rownames(big_U)
+
+  for (from in transient_states) {
+    for (to in transient_states) {
+      trans_name <- paste(from, to, sep = delim)
+      if (!trans_name %in% names(p_list)) next
+
+      p_vec <- p_list[[trans_name]]
+      if (length(p_vec) != n_age) stop("Transition vector length mismatch")
+
+      # build the block for this transition (age-by-age shift)
+      block <- matrix(0, n_age, n_age)
+      block[cbind(1:(n_age - 1), 2:n_age)] <- p_vec[1:(n_age - 1)]
+
+      from_offset <- (state_index[[from]] - 1) * n_age
+      to_offset <- (state_index[[to]] - 1) * n_age
+      big_U[(1:n_age) + from_offset, (1:n_age) + to_offset] <- block
+    }
+  }
+
+  # Fundamental matrix
+  I <- diag(n_age * n_states)
+  N <- solve(I - big_U)
+
+  # Initial condition vector with correct age alignment
+  pi0 <- rep(0, n_age * n_states)
+  start_age_index <- 1  # typically age[1]
+
+  if (!is.null(init)) {
+    stopifnot(abs(sum(init) - 1) < 1e-8)
+    for (s in names(init)) {
+      pi0[(state_index[[s]] - 1) * n_age + start_age_index] <- init[[s]]
+    }
+  } else if (!is.null(origin_state)) {
+    pi0[(state_index[[origin_state]] - 1) * n_age + start_age_index] <- 1
+  } else {
+    stop("Must supply either `origin_state` or `init`.")
+  }
+
+  expected <- as.numeric(pi0 %*% N)
+  df <- data.frame(
+    age = rep(age, times = n_states),
+    state = rep(transient_states, each = n_age),
+    expected_time = expected
+  )
+
+  tidyr::pivot_wider(df, names_from = state, values_from = expected_time)
+}
+```
+And a second version using sparse matrices, just in case you think the above isn't fair in terms of memory. You'll see later that it is. 
+```{r}
+calc_occupancies_inversion_sparse <- function(p_list, age, origin_state = NULL, init = NULL, delim = "->") {
+  n_age <- length(age)
+  trans_info <- split_transitions(p_list, delim = delim)
+  from_states <- trans_info$from
+  to_states   <- trans_info$to
+
+  transient_states <- sort(unique(from_states))
+  state_index <- setNames(seq_along(transient_states), transient_states)
+  n_states <- length(transient_states)
+
+  # Efficient sparse block-wise construction
+  library(Matrix)
+  rows <- integer()
+  cols <- integer()
+  vals <- numeric()
+
+  for (from in transient_states) {
+    for (to in transient_states) {
+      trans_name <- paste(from, to, sep = delim)
+      if (!trans_name %in% names(p_list)) next
+
+      p_vec <- p_list[[trans_name]]
+      if (length(p_vec) != n_age) stop("Transition vector length mismatch")
+
+      idx <- 1:(n_age - 1)
+      i_offset <- (state_index[[from]] - 1) * n_age
+      j_offset <- (state_index[[to]] - 1) * n_age
+
+      rows <- c(rows, i_offset + idx)
+      cols <- c(cols, j_offset + idx + 1)
+      vals <- c(vals, p_vec[idx])
+    }
+  }
+
+  big_U <- sparseMatrix(i = rows, j = cols, x = vals, dims = c(n_age * n_states, n_age * n_states))
+  I <- Diagonal(n_age * n_states)
+  N <- solve(I - big_U)
+
+  # Initial condition vector with correct age alignment
+  pi0 <- rep(0, n_age * n_states)
+  start_age_index <- 1  # typically age[1]
+
+  if (!is.null(init)) {
+    stopifnot(abs(sum(init) - 1) < 1e-8)
+    for (s in names(init)) {
+      pi0[(state_index[[s]] - 1) * n_age + start_age_index] <- init[[s]]
+    }
+  } else if (!is.null(origin_state)) {
+    pi0[(state_index[[origin_state]] - 1) * n_age + start_age_index] <- 1
+  } else {
+    stop("Must supply either `origin_state` or `init`.")
+  }
+
+  expected <- as.numeric(pi0 %*% N)
+  df <- data.frame(
+    age = rep(age, times = n_states),
+    state = rep(transient_states, each = n_age),
+    expected_time = expected
+  )
+
+  tidyr::pivot_wider(df, names_from = state, values_from = expected_time)
+}
+
+```
+
+## Example comparison (value match)
+
+First let's verify that all four methods give the same values, in this case using example data given in the package. This should convince us that we're doing efficiency comparisons between equivalent methods.
+```{r value-compare}
+age <- 65:100
+p_list <- prepare_p_list(
+  transitions_example, delim = ""
+)$p_list
+
+base_inv <- calc_occupancies_inversion(p_list, 
+                                  age, 
+                                  origin_state = "P", 
+                                  delim = "") |> 
+  pivot_longer(-age, names_to = "state", values_to = "p_base_inv") |> 
+  arrange(age,state)
+sparse_inv <- calc_occupancies_inversion_sparse(p_list, 
+                                  age, 
+                                  origin_state = "P", 
+                                  delim = "") |> 
+  pivot_longer(-age, names_to = "state", values_to = "p_inv_sparse") |> 
+  arrange(age,state)
+core <- calc_occupancies(p_list, 
+                         age, 
+                         origin_state = "P", 
+                         delim = "") |> 
+  pivot_longer(-age, names_to = "state", values_to = "p_core") |> 
+  arrange(age,state)
+
+base_loop <- calc_occupancies_base(p_list, 
+                              age, 
+                              origin_state = "P", 
+                              delim = "") |> 
+  pivot_longer(-age, names_to = "state", values_to = "p_base_loop") |> 
+  arrange(age,state)
+
+compare <- left_join(base_inv, core, by = join_by(age, state)) |> 
+  left_join(base_loop,by = join_by(age, state))|> 
+  left_join(sparse_inv,by = join_by(age, state))
+
+all.equal(compare$p_core, compare$p_base_inv)
+all.equal(compare$p_core, compare$p_base_loop)
+all.equal(compare$p_core, compare$p_inv_sparse)
+```
+
+## Benchmark Setup
+
+We make a function `generate_p_list()` that simulates transitions for a given number of transient states (implied 1 absorbing state, although this isn't necessary), and age classes. We then set up a scenarios object
+```{r benchmark-setup}
+generate_p_list <- function(n_trans, ages, delim = "->") {
+  states <- LETTERS[1:n_trans]
+  age_len <- length(ages)
+  p_list <- list()
+
+  for (from in states) {
+    p_abs <- runif(age_len, 0, 0.5)
+    raw_probs <- matrix(runif(age_len * n_trans), nrow = age_len)
+    row_sums <- rowSums(raw_probs)
+    scale_factors <- 1 - p_abs
+    norm_probs <- raw_probs / row_sums * scale_factors
+
+    for (i in seq_along(states)) {
+      to <- states[i]
+      trans_name <- paste(from, to, sep = delim)
+      p_list[[trans_name]] <- norm_probs[, i]
+    }
+
+    trans_abs <- paste(from, "Z", sep = delim)
+    p_list[[trans_abs]] <- p_abs
+  }
+
+  return(p_list)
+}
+
+age_ranges <- list(0:10, 0:40, 0:80)
+n_trans_vec <- c(2, 5, 10, 20)
+scenarios <- expand.grid(n_trans = n_trans_vec, age_len = sapply(age_ranges, length), stringsAsFactors = FALSE)
+scenarios$ages <- age_ranges[match(scenarios$age_len, sapply(age_ranges, length))]
+```
+
+## Run Benchmarks
+
+Now for a given simulation, we measure execution time and memory allocation 10 times for each approach and scenario.
+```{r run-benchmark, message=FALSE, warning=FALSE}
+results <- scenarios %>%
+  mutate(
+    bench = purrr::pmap(list(n_trans, ages), function(n_trans, ages) {
+      p_list <- generate_p_list(n_trans, ages)
+      bench::mark(
+        core = calc_occupancies(p_list, 
+                                age = ages, 
+                                origin_state = LETTERS[1], 
+                                delim = "->"),
+        base_loop = calc_occupancies_base(p_list, 
+                                          age = ages, 
+                                          origin_state = LETTERS[1], 
+                                          delim = "->"),
+        base_inv = calc_occupancies_inversion(p_list, 
+                                              age = ages, 
+                                              origin_state = LETTERS[1], 
+                                              delim = "->"),
+      sparse_inv = calc_occupancies_inversion_sparse(p_list, 
+                                                     age = ages, 
+                                                     origin_state = LETTERS[1], 
+                                                     delim = "->"),
+        iterations = 10,
+        check = FALSE
+      )
+    })
+  ) %>%
+  tidyr::unnest(bench) %>%
+  select(n_trans, age_len, expression, median, mem_alloc)
+```
+
+## Execution Time
+
+We here calculate the execution time ratio of all three alternatives to the core method. The core method is far faster in the size range used in most of the demographic literature. For higher numbers of age classes (e.g. 0-80) the core method is > 10 times faster than matrix inversion, even up to 20 transient states. For bootstrapping typical model sizes (e.g. 2-4 transient states and ~50 age classes) you should expect much faster execution with the core method. I do not know whether there is eventually a performance crossover, or whether we'd get some level of asymptotic superiority or a U-shape. Maybe someone will tell me. Note, the base-R loop approach is outperforming both inversion variants, and base-R inversion tends to outperform sparse inversion. Possibly because the matrices we produce aren't sparse enough?
+```{r plot-time}
+results %>%
+  mutate(expression = as.character(expression),
+         median = as.numeric(median)) %>%
+  select(n_trans, age_len, expression, median) %>%
+  pivot_wider(names_from = expression, values_from = median) %>%
+  mutate(ratio_inv_base = base_inv / core,
+         ratio_inv_sparse = sparse_inv / core,
+         ratio_base_loop = base_loop / core) %>%
+  select(n_trans, age_len, starts_with("ratio")) |> 
+  pivot_longer(starts_with("ratio"), names_to = "variant", values_to = "ratio", names_prefix = "ratio_") |> 
+  ggplot(aes(x = n_trans, y = ratio, color = as.factor(age_len))) +
+  geom_line() + geom_point() +
+  labs(title = "Benchmark: median execution time ratio (variant / core)",
+       x = "# Transient States", y = "Execution Time Ratio",
+       color = "# age bins") +
+  theme_minimal() +
+  geom_hline(yintercept=1) +
+  facet_wrap(~variant)
+```
+
+## Memory Allocation
+Another matter to consider is memory usage. Especially when parallel processing bootstraps (which absolutely makes sense), memory usage might balloon. It makes sense that a loop-based approach is less memory intensive than a matrix-based approach, as no large objects are created. In terms of memory usage, the advantage of the core loop method using `Rcpp` increases as model complexity increases, but is notable already at small model sizes.
+```{r plot-mem}
+results %>%
+  mutate(expression = as.character(expression),
+         mem = as.numeric(mem_alloc)) %>%
+  select(n_trans, age_len, expression, mem) %>%
+  pivot_wider(names_from = expression, values_from = mem) %>%
+  mutate(ratio_inv_base = base_inv / core,
+         ratio_inv_sparse = sparse_inv / core,
+         ratio_base_loop = base_loop / core) %>%
+  select(n_trans, age_len, starts_with("ratio")) |> 
+  pivot_longer(starts_with("ratio"), names_to = "variant", values_to = "ratio", names_prefix = "ratio_") %>%
+  ggplot(aes(x = n_trans, y = ratio, color = as.factor(age_len))) +
+  geom_line() + geom_point() +
+  scale_y_log10() +
+  labs(title = "Benchmark: memory allocation ratio (variant / core)",
+       x = "# Transient States", y = "Memory Ratio (log)",
+       color = "# age bins") +
+  theme_minimal()+
+  facet_wrap(~variant)
+```
+
+## Conclusions
+Our core calculator outperforms all comparisons thus derived in terms of speed and especially in terms of memory usage. You may consider wrapping it for your own computationally intensive needs, for instance, when you need to bootstrap confidence intervals (depending how) or run a Horiuchi decomposition :-).
+
+
