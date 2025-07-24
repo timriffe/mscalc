@@ -1,4 +1,4 @@
 
 
 devtools::build_vignettes()
-devtools::check(build_vignettes = FALSE)
+devtools::check(vignettes = FALSE)
