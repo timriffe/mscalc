@@ -89,6 +89,50 @@ test_that("1-state with PP or PD works like lifetable", {
   expect_true(all(diff(res2$P) < 0))
 })
 
+test_that("calc_occupancies does trapezoidal integration of survivorship", {
+  age <- 65:70
+
+  # 1-state model: P -> P with survivorship 0.9 per step
+  p_list <- list(PP = rep(0.9, length(age)))
+  prep   <- prepare_p_list(transitions = p_list, age = age)
+
+  # lx-style survivorship
+  surv <- calc_survivorship(
+    transitions  = prep$p_list,
+    age          = prep$age,
+    origin_state = "P",
+    delim        = "->"
+  )
+
+  lx <- surv$P
+
+  # ---- age_interval = 1 ----
+  occ1 <- calc_occupancies(
+    transitions  = prep$p_list,
+    age          = prep$age,
+    origin_state = "P",
+    delim        = "->",
+    age_interval = 1
+  )
+
+  # trapezoid with open interval going to 0
+  lx_lead <- c(lx[-1L], 0)
+  expected_Lx1 <- 1 * (lx + lx_lead) / 2
+
+  expect_equal(occ1$P, expected_Lx1)
+
+  # ---- age_interval = 2 (should just scale) ----
+  occ2 <- calc_occupancies(
+    transitions  = prep$p_list,
+    age          = prep$age,
+    origin_state = "P",
+    delim        = "->",
+    age_interval = 2
+  )
+
+  expected_Lx2 <- 2 * (lx + lx_lead) / 2  # just double the previous
+  expect_equal(occ2$P, expected_Lx2)
+})
 
 test_that("Single-state system with no transitions throws error", {
   p_list <- list()  # no transitions
