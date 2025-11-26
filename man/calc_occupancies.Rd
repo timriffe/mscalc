@@ -5,7 +5,7 @@
 \title{Calculate multistate occupancy times}
 \usage{
 calc_occupancies(
-  p_list,
+  transitions,
   age = NULL,
   init = NULL,
   origin_state = NULL,
@@ -17,8 +17,6 @@ calc_occupancies(
 )
 }
 \arguments{
-\item{p_list}{A named list of age-specific transition probabilities. Recall data.frames and tibbles can function as lists too.}
-
 \item{age}{A numeric vector of age values.}
 
 \item{init}{Optional named vector of initial state composition.}
@@ -34,6 +32,8 @@ calc_occupancies(
 \item{trans_col}{Name of the transition column (default = \code{"from_to"}) when input is a tidy \code{data.frame}.}
 
 \item{p_col}{Name of the transition probability column (default = \code{"p"}) when input is a tidy \code{data.frame}.}
+
+\item{p_list}{A named list of age-specific transition probabilities. Recall data.frames and tibbles can function as lists too.}
 }
 \value{
 A data frame of occupancy times by state and age.

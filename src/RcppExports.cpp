@@ -26,9 +26,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// calc_occupancy_matrix_cpp
+NumericMatrix calc_occupancy_matrix_cpp(NumericMatrix p_mat, CharacterVector transient_states, CharacterVector all_states, NumericVector init_probs, int n, std::string delim);
+RcppExport SEXP _mscalc_calc_occupancy_matrix_cpp(SEXP p_matSEXP, SEXP transient_statesSEXP, SEXP all_statesSEXP, SEXP init_probsSEXP, SEXP nSEXP, SEXP delimSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type p_mat(p_matSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type transient_states(transient_statesSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type all_states(all_statesSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type init_probs(init_probsSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< std::string >::type delim(delimSEXP);
+    rcpp_result_gen = Rcpp::wrap(calc_occupancy_matrix_cpp(p_mat, transient_states, all_states, init_probs, n, delim));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_mscalc_calc_occupancy_cpp", (DL_FUNC) &_mscalc_calc_occupancy_cpp, 6},
+    {"_mscalc_calc_occupancy_matrix_cpp", (DL_FUNC) &_mscalc_calc_occupancy_matrix_cpp, 6},
     {NULL, NULL, 0}
 };
 
