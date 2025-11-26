@@ -1,169 +1,198 @@
-#' Calculate multistate occupancy times
+#' Calculate multistate survivorship (lx-style)
 #'
-#' @description Calculates state occupancy over age using a list of transition probabilities. Uses faster internal calculator than other versions.
+#' Core wrapper around the C++ implementation. Accepts transition
+#' probabilities in several formats (list, tidy data frame, wide data frame,
+#' or numeric matrix) and returns state survivorship (lx-like) over age.
 #'
-#' @param p_list A named list of age-specific transition probabilities. Recall data.frames and tibbles can function as lists too.
-#' @param age A numeric vector of age values.
-#' @param init Optional named vector of initial state composition.
-#' @param origin_state Optional single origin state (alternative to `init`).
-#' @param delim Character delimiter separating from/to in transition names.
-#' @param age_interval integer value representing time step (default 1)
-#' @param age_col Name of the age column (default = `"age"`) when input is a data.frame.
-#' @param trans_col Name of the transition column (default = `"from_to"`) when input is a tidy `data.frame`.
-#' @param p_col Name of the transition probability column (default = `"p"`) when input is a tidy `data.frame`.
-#' @return A data frame of occupancy times by state and age.
+#' @param transitions Transition data. Can be:
+#'   * a named list of numeric vectors (one per transition),
+#'   * a "tidy" data frame with columns `age`, `from_to`, `p` (or renamed via
+#'     `age_col`, `trans_col`, `p_col`),
+#'   * a wide data frame with one row per age and one column per transition,
+#'     plus an age column,
+#'   * a numeric matrix with one row per age and one column per transition.
+#' @param age Optional numeric vector of ages (required if `transitions` is a
+#'   plain list). If `transitions` is a tidy or wide data frame,
+#'   `age` is taken from `age_col`.
+#' @param init Optional named numeric vector giving an initial state
+#'   distribution over transient states (must sum to 1).
+#' @param origin_state Optional single state name indicating a degenerate
+#'   initial distribution (everyone starts in this state). Ignored if `init`
+#'   is provided.
+#' @param delim Delimiter used in transition names (e.g. `"->"`, `""`, `":"`).
+#'   If `NULL`, it is inferred by `detect_delim()`.
+#' @param radix Scalar multiplying the survivorship (default 1). Akin to the
+#'   lifetable radix (e.g. 100000), applied after probabilities are computed.
+#' @param age_col Column name containing age in tidy/wide data frames.
+#' @param trans_col Column name containing transition labels in tidy input.
+#' @param p_col Column name containing transition probabilities in tidy input.
+#'
+#' @return A data frame with one row per age and one column per transient
+#'   state, plus an `age` (or `age_col`) column. Values are lx-like
+#'   survivorship (stocks at the start of each interval).
 #' @export
-#' @importFrom stats setNames
-#' @examples
-#'
-#'prep <- prepare_p_list(transitions_example)
-#'occup <- calc_occupancies(prep$p_list, prep$age, origin_state = "P")
-#'head(occup)
-#' # or without prep (but with prep overhead happening internally)
-#' occup <- calc_occupancies(transitions_example, origin_state = "P")
+calc_survivorship <- function(transitions,
+                              age = NULL,
+                              init = NULL,
+                              origin_state = NULL,
+                              delim = NULL,
+                              radix = 1,
+                              age_col = "age",
+                              trans_col = "from_to",
+                              p_col = "p") {
 
+  ## 1. Classify input ------------------------------------------------------
+
+  is_df       <- inherits(transitions, "data.frame")
+  is_mat      <- is.matrix(transitions)
+  is_list     <- is.list(transitions) && !is_df && !is_mat
+  is_num_list <- is_list && all(vapply(transitions, is.numeric, logical(1)))
+
+  # Will end up with:
+  #   p_list : named list of numeric vectors (one per transition)
+  #   age    : numeric vector of ages
+  if (is_num_list) {
+    # Case A: proper p_list + age supplied
+    if (is.null(age)) {
+      stop("If supplying transitions as a list, you must also supply `age`.")
+    }
+    p_list <- transitions
+
+  } else if (is_df || is_mat) {
+    # Case B: tidy / wide data frame, or matrix -> go through prepare_p_list
+    prep <- prepare_p_list(
+      transitions,
+      age_col   = age_col,
+      trans_col = trans_col,
+      p_col     = p_col,
+      delim     = delim
+    )
+    p_list <- prep$p_list
+    age    <- prep$age
+
+  } else {
+    stop("Unrecognized input for `transitions`. Must be list, matrix, or data frame.")
+  }
+
+  n <- length(age)
+
+  ## 2. Infer / validate delimiter and states -------------------------------
+
+  if (is.null(delim)) {
+    delim <- detect_delim(names(p_list))
+  }
+
+  trans_info       <- split_transitions(p_list, delim)
+  from_states      <- trans_info$from
+  to_states        <- trans_info$to
+  transient_states <- from_states
+  absorbing_states <- setdiff(to_states, from_states)  # kept for clarity
+  all_states       <- union(from_states, to_states)
+
+  ## 3. Build initial state distribution -----------------------------------
+
+  init_probs <- build_init_probs(init, origin_state, transient_states)
+
+  ## 4. Sanity checks on probabilities -------------------------------------
+
+  all_probs <- unlist(p_list, use.names = FALSE)
+
+  # NA check
+  if (any(is.na(all_probs))) {
+    stop("Transition probabilities must not contain NA values.")
+  }
+
+  # Length check
+  lengths_vec <- vapply(p_list, length, integer(1))
+  if (length(unique(lengths_vec)) != 1L || unique(lengths_vec) != n) {
+    stop("All transition vectors in `p_list` must have the same length as `age`.")
+  }
+
+  # Bounds check
+  if (any(all_probs < 0 | all_probs > 1)) {
+    stop("Transition probabilities must be between 0 and 1 (inclusive).")
+  }
+
+  ## 5. Call C++ core (list-based survivorship) -----------------------------
+
+  state_occup <- calc_occupancy_cpp(
+    p_list           = p_list,
+    transient_states = transient_states,
+    all_states       = all_states,
+    init_probs       = init_probs,
+    n                = n,
+    delim            = delim
+  )
+
+  # Apply radix scaling (linear, so post-hoc is fine)
+  state_occup <- state_occup * radix
+
+  ## 6. Format output -------------------------------------------------------
+
+  out <- as.data.frame(state_occup)
+  out[[age_col]] <- age
+  out
+}
+
+#' Calculate multistate occupancy times (Lx-style)
+#'
+#' Wrapper around [calc_survivorship()] that converts lx-like survivorship
+#' into occupancy times via trapezoidal integration over age.
+#'
+#' @inheritParams calc_survivorship
+#' @param age_interval Width of the age interval used for integration
+#'   (default 1). Occupancies are scaled by this factor.
+#'
+#' @return A data frame with one row per age and one column per transient
+#'   state, plus an `age` (or `age_col`) column. Values are Lx-like
+#'   occupancy times (expected time spent in each state in the age interval).
+#' @export
 calc_occupancies <- function(transitions,
                              age = NULL,
                              init = NULL,
                              origin_state = NULL,
                              delim = NULL,
                              age_interval = 1,
+                             radix = 1,
                              age_col = "age",
                              trans_col = "from_to",
                              p_col = "p") {
 
-  is_df <- inherits(transitions, "data.frame")
-  is_list <- is.list(transitions) && !is_df && all(sapply(transitions, is.numeric))
-  is_matrix <- is.matrix(transitions)
+  # 1. Get survivorship (lx-style) using the core function
+  surv <- calc_survivorship(
+    transitions = transitions,
+    age         = age,
+    init        = init,
+    origin_state = origin_state,
+    delim       = delim,
+    radix       = radix,
+    age_col     = age_col,
+    trans_col   = trans_col,
+    p_col       = p_col
+  )
 
-  if (is_list) {
-    # transitions is p_list, use C++ list method
-    if (is.null(age)) {
-      stop("If supplying transitions as a list, you must also supply `age`.")
-    }
-    n <- length(age)
-    trans_info <- split_transitions(transitions, delim)
-    from_states <- trans_info$from
-    to_states <- trans_info$to
-    transient_states <- from_states
-    absorbing_states <- setdiff(to_states, from_states)
-    all_states <- union(from_states, to_states)
+  age_vec   <- surv[[age_col]]
+  state_cols <- setdiff(names(surv), age_col)
 
-    # Validate or build init_probs
-    init_probs <- build_init_probs(init, origin_state, transient_states)
-
-    state_occup <- calc_occupancy_cpp(transitions, transient_states, all_states, init_probs, n, delim)
-    state_occup <- state_occup #* age_interval
-
-    out <- as.data.frame(state_occup)
-    out$age <- age
-    return(out)
-
-  } else if (is_matrix) {
-    age <- check_or_extract_age(age, transitions)
-    n <- length(age)
-
-    if (is.null(delim)) delim <- detect_delim(colnames(transitions))
-    trans_from <- if (delim == "") substr(colnames(transitions), 1, 1) else sub(paste0(delim, ".*$"), "", colnames(transitions))
-    transient_states <- unique(trans_from)
-    to_states <- if (delim == "") substr(colnames(transitions), 2, 2) else sub(paste0("^.*", delim), "", colnames(transitions))
-    all_states <- union(transient_states, to_states)
-
-    init_probs <- build_init_probs(init, origin_state, transient_states)
-
-    state_occup <- calc_occupancy_matrix_cpp(
-      p_mat = transitions,
-      transient_states = transient_states,
-      all_states = all_states,
-      init_probs = unname(init_probs),
-      n = length(age),
-      delim = delim
-    )
-    state_occup <- state_occup #* age_interval
-
-    out <- as.data.frame(state_occup)
-    out$age <- age
-    return(out)
-
-  } else if (is_df) {
-    if (all(c(age_col, trans_col, p_col) %in% names(transitions))) {
-      tidy_df <- transitions
-      tidy_df <- tidy_df[order(tidy_df[[trans_col]], tidy_df[[age_col]]), ]
-      age <- sort(unique(tidy_df[[age_col]]))
-
-      trans_names <- unique(tidy_df[[trans_col]])
-      if (length(trans_names) * length(age) != nrow(tidy_df)) {
-        stop("Tidy input must have one row per transition per age.")
-      }
-
-      p_vec <- tidy_df[[p_col]]
-      dim(p_vec) <- c(length(age), length(trans_names))
-      colnames(p_vec) <- trans_names
-
-      if (is.null(delim)) delim <- detect_delim(colnames(p_vec))
-      trans_from <- if (delim == "") substr(colnames(p_vec), 1, 1) else sub(paste0(delim, ".*$"), "", colnames(p_vec))
-      transient_states <- unique(trans_from)
-      to_states <- if (delim == "") substr(colnames(p_vec), 2, 2) else sub(paste0("^.*", delim), "", colnames(p_vec))
-      all_states <- union(transient_states, to_states)
-
-      init_probs <- build_init_probs(init, origin_state, transient_states)
-
-      state_occup <- calc_occupancy_matrix_cpp(
-        p_mat = p_vec,
-        transient_states = transient_states,
-        all_states = all_states,
-        init_probs = unname(init_probs),
-        n = length(age),
-        delim = delim
-      )
-      state_occup <- state_occup * age_interval
-
-      out <- as.data.frame(state_occup)
-      out$age <- age
-      return(out)
-
-    } else if (age_col %in% names(transitions)) {
-      age <- transitions[[age_col]]
-      trans_cols <- setdiff(names(transitions), age_col)
-      pmat <- as.matrix(transitions[trans_cols])
-      colnames(pmat) <- trans_cols
-
-      if (is.null(delim)) delim <- detect_delim(colnames(pmat))
-      trans_from <- if (delim == "") substr(colnames(pmat), 1, 1) else sub(paste0(delim, ".*$"), "", colnames(pmat))
-      transient_states <- unique(trans_from)
-      to_states <- if (delim == "") substr(colnames(pmat), 2, 2) else sub(paste0("^.*", delim), "", colnames(pmat))
-      all_states <- union(transient_states, to_states)
-
-      init_probs <- build_init_probs(init, origin_state, transient_states)
-
-      state_occup <- calc_occupancy_matrix_cpp(
-        p_mat = pmat,
-        transient_states = transient_states,
-        all_states = all_states,
-        init_probs = unname(init_probs),
-        n = length(age),
-        delim = delim
-      )                          #
-      state_occup <- state_occup #* age_interval
-
-      out <- as.data.frame(state_occup)
-      out[[age_col]] <- age
-      return(out)
-
-    } else {
-      stop("Unrecognized structure of data frame input. Provide either tidy or wide format with correct column names.")
-    }
-
-  } else {
-    stop("Unrecognized input for transitions. Must be list, matrix, or tidy/wide data frame.")
+  # 2. Trapezoidal integration over age, per state
+  occ <- surv
+  for (s in state_cols) {
+    lx <- surv[[s]]
+    lx_lead <- c(lx[-1L], 0)  # lead(lx, default = 0) without needing dplyr
+    occ[[s]] <- age_interval * (lx + lx_lead) / 2
   }
+
+  occ
 }
 
-# Helper to construct initial probabilities
+
+# Helper to construct initial state distribution
 build_init_probs <- function(init, origin_state, transient_states) {
   init_probs <- rep(0, length(transient_states))
   names(init_probs) <- transient_states
+
   if (!is.null(init)) {
+    stopifnot(all(names(init) %in% transient_states))
     stopifnot(abs(sum(init) - 1) < 1e-8)
     init_probs[names(init)] <- init
   } else if (!is.null(origin_state)) {
@@ -172,8 +201,11 @@ build_init_probs <- function(init, origin_state, transient_states) {
   } else {
     stop("Must supply either `origin_state` or `init`.")
   }
-  return(init_probs)
+
+  init_probs
 }
+
+
 
 check_or_extract_age <- function(age, mat) {
   if (!is.null(age)) return(age)

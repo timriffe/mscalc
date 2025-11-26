@@ -58,18 +58,37 @@ test_that("calc_occupancies requires either init or origin_state", {
 
 test_that("1-state with PP or PD works like lifetable", {
   age <- 65:70
-  # P -> P (perfect survivorship)
-  p_list <- list(PP = rep(.9, length(age)))
-  p_list <- prepare_p_list(transitions = p_list,age=age)
-  res <- calc_occupancies(p_list$p_list, age = age, origin_state = "P", delim="->")
-  expect_equal(res$P, c(1,cumprod(rep(.9, length(age)-1))))
 
-  # P -> D (some death)
-  p_list <- list(PD = rep(0.1, length(age)))
-  p_list <- prepare_p_list(transitions = p_list,age=age)
-  res2 <- calc_occupancies(p_list$p_list, age = age, origin_state = "P")
-  expect_true(all(diff(res2$P) < 0))  # should decline
+  # P -> P (survivorship 0.9 per step)
+  p_list <- list(PP = rep(0.9, length(age)))
+  prep   <- prepare_p_list(transitions = p_list, age = age)
+
+  res <- calc_survivorship(
+    transitions  = prep$p_list,
+    age          = prep$age,
+    origin_state = "P",
+    delim        = "->"
+  )
+
+  expect_equal(
+    res$P,
+    c(1, cumprod(rep(0.9, length(age) - 1)))
+  )
+
+  # P -> D (some death) via PD, PP inferred
+  p_list2 <- list(PD = rep(0.1, length(age)))
+  prep2   <- prepare_p_list(transitions = p_list2, age = age)
+
+  res2 <- calc_survivorship(
+    transitions  = prep2$p_list,
+    age          = prep2$age,
+    origin_state = "P"
+  )
+
+  # Survivorship in P should be strictly declining
+  expect_true(all(diff(res2$P) < 0))
 })
+
 
 test_that("Single-state system with no transitions throws error", {
   p_list <- list()  # no transitions
