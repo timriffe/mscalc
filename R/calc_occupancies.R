@@ -655,24 +655,25 @@ prepare_p_list <- function(transitions,
   to_states <- trans_info$to
 
   # Degenerate case: only self-transitions (e.g., PP)
-  if (length(from_states) == 1 & length(to_states) == 1 & all(from_states == to_states)) {
-    if (delim == "") delim <- "->"
+  if (length(from_states) == 1 & length(to_states) == 1){
+    if( all(from_states == to_states)) {
+      if (delim == "") delim <- "->"
 
-    # Convert to standard form with absorbing state
-    new_p_list <- list()
-    for (name in names(p_list)) {
-      from <- substr(name, 1, nchar(name) / 2)
-      p_self <- p_list[[name]]
-      new_p_list[[paste(from, from, sep = delim)]] <- p_self
-      new_p_list[[paste(from, "abs", sep = delim)]] <- pmax(0, 1 - p_self)
+      # Convert to standard form with absorbing state
+      new_p_list <- list()
+      for (name in names(p_list)) {
+        from <- substr(name, 1, nchar(name) / 2)
+        p_self <- p_list[[name]]
+        new_p_list[[paste(from, from, sep = delim)]] <- p_self
+        new_p_list[[paste(from, "abs", sep = delim)]] <- pmax(0, 1 - p_self)
+      }
+      p_list <- new_p_list
+
+      trans_info <- split_transitions(p_list, delim)
+      from_states <- trans_info$from
+      to_states   <- trans_info$to
     }
-    p_list <- new_p_list
-
-    trans_info <- split_transitions(p_list, delim)
-    from_states <- trans_info$from
-    to_states   <- trans_info$to
   }
-
   # Complete transition structure
   p_list <- fill_missing_transitions(p_list, from_states, to_states, delim)
   p_list <- infer_self_transitions(p_list, from_states, to_states, delim)
