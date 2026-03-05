@@ -655,7 +655,7 @@ prepare_p_list <- function(transitions,
   to_states <- trans_info$to
 
   # Degenerate case: only self-transitions (e.g., PP)
-  if (all(from_states == to_states)) {
+  if (length(from_states) == 1 & length(to_states) ==1 & all(from_states == to_states)) {
     if (delim == "") delim <- "->"
 
     # Convert to standard form with absorbing state
